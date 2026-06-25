@@ -4,6 +4,8 @@
 set -euo pipefail
 
 [ "$(uname)" = Darwin ] || { echo "macOS only." >&2; exit 1; }
+# Per-user LaunchAgent: as root it would load for root, not you. The script sudo's where needed.
+[ "$(id -u)" = 0 ] && { echo "Run as your user, not root (it sudo's where needed)." >&2; exit 1; }
 
 # Install the latest published release; fall back to main if none exists.
 TAG="$(curl -fsSL https://api.github.com/repos/tamtamchik/macos-yubikey-touch-notifier/releases/latest 2>/dev/null | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p')" || true
