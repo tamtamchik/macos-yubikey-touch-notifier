@@ -18,6 +18,7 @@ the icon and **withdraws the banner once you touch the key**).
 curl -fsSL https://raw.githubusercontent.com/tamtamchik/macos-yubikey-touch-notifier/main/install.sh | bash
 ```
 
+Installs the latest published release (falls back to `main` if none exists).
 Needs [Homebrew](https://brew.sh) (for `terminal-notifier`) and asks for `sudo`
 to write into `/usr/local`.
 
