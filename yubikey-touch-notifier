@@ -1,0 +1,92 @@
+#!/bin/bash
+# Notify when a YubiKey is waiting for a touch (macOS).
+#
+# Detection reads the macOS unified log. Two cases are matched:
+#   FIDO2/U2F  - a client that opened the YubiKey HID device calls startQueue
+#   OpenPGP    - the smartcard stack (CryptoTokenKit) emits "Time extension received"
+#
+# State is edge-triggered: notify once when a touch starts, reset when it ends.
+
+set -euo pipefail
+
+PREDICATE='(processImagePath == "/kernel" AND senderImagePath ENDSWITH "IOHIDFamily") OR (subsystem CONTAINS "CryptoTokenKit")'
+
+# launchd does not inherit a login PATH, so Homebrew's bin must be added
+# explicitly or command -v below misses terminal-notifier and the daemon
+# crash-loops under KeepAlive.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+# terminal-notifier shows the icon and withdraws the banner on touch (-remove);
+# osascript does neither, so it is required, not optional.
+TN="$(command -v terminal-notifier)" || { echo "need terminal-notifier: brew install terminal-notifier" >&2; exit 1; }
+
+SOUND="${YK_SOUND-Submarine}"                                    # YK_SOUND= to mute
+ICON="${YK_ICON:-/usr/local/share/yubikey-touch-notifier/icon.png}"
+
+# Single-quote the values: they end up in a /bin/sh command built by awk, so an
+# icon path with spaces (or shell metacharacters) would otherwise break it.
+snd=""; [ -n "$SOUND" ] && snd=" -sound '$SOUND'"
+# -contentImage, not -appIcon: macOS (Big Sur+) ignores terminal-notifier's
+# app-icon override, but the content image on the right still renders.
+icon=""; [ -f "$ICON" ] && icon=" -contentImage '$ICON'"
+
+# IORegistryEntryIDs of Yubico (vendor 0x1050 = 4176) HID devices already
+# plugged in. Live plug-ins are picked up from the log below, but a device
+# present before this starts is only known via ioreg.
+SEED="$(ioreg -r -c AppleUserUSBHostHIDDevice -d 1 2>/dev/null | awk '
+    /\+-o /             { id = ""; if (match($0, /id 0x[0-9a-f]+/)) id = substr($0, RSTART+3, RLENGTH-3) }
+    /"VendorID" = 4176/ { if (id) print id }
+')"
+
+# awk runs as a streaming state machine over plain log lines.
+exec /usr/bin/log stream --level debug --style compact --predicate "$PREDICATE" \
+  | awk -v tn="$TN" -v snd="$snd" -v icon="$icon" -v seed="$SEED" '
+    BEGIN { n = split(seed, a, /[ \n]+/); for (i = 1; i <= n; i++) if (a[i] != "") ykdev[a[i]] = 1 }
+
+    # </dev/null: terminal-notifier reads its message from stdin when none is
+    # given, and would otherwise consume lines from the inherited log-stream
+    # pipe (posting stray "Terminal" notifications and breaking -remove).
+    function post(kind) {
+        system(tn " -title \"YubiKey " kind "\" -message \"Touch your YubiKey\" -group yk-touch" snd icon " </dev/null")
+    }
+    function dismiss() { system(tn " -remove yk-touch </dev/null") }
+
+    # A YubiKey HID device registering -> remember its address so opens of it
+    # can be told apart from other USB HID devices.
+    /IORegistryEntryID/ && ($0 ~ /<string[^>]*>Yubico</ || $0 ~ /VendorID<\/key><integer[^>]*>0x1050</) {
+        d = $0; sub(/.*IORegistryEntryID<\/key><integer[^>]*>/, "", d); sub(/<.*/, "", d)
+        ykdev[d] = 1
+        next
+    }
+
+    # Record the client that opened a YubiKey HID device (skip other devices).
+    /AppleUserUSBHostHIDDevice:0x[0-9a-f]+ open by IOHIDLibUserClient:0x[0-9a-f]+/ {
+        d = $0; sub(/.*AppleUserUSBHostHIDDevice:/, "", d); sub(/[^0-9a-fx].*/, "", d)
+        c = $0; sub(/.*open by IOHIDLibUserClient:/, "", c); sub(/[^0-9a-fx].*/, "", c)
+        if (ykdev[d]) yk[c] = 1
+        next
+    }
+
+    # FIDO2 touch begins / ends for one of those clients.
+    /IOHIDLibUserClient:0x[0-9a-f]+ startQueue/ {
+        s = $0; sub(/.*IOHIDLibUserClient:/, "", s); sub(/ startQueue.*/, "", s)
+        if (yk[s] && !fido) { post("FIDO2"); fido = 1 }
+        next
+    }
+    /IOHIDLibUserClient:0x[0-9a-f]+ stopQueue/ {
+        s = $0; sub(/.*IOHIDLibUserClient:/, "", s); sub(/ stopQueue.*/, "", s)
+        if (yk[s] && fido) { dismiss(); fido = 0 }
+        next
+    }
+
+    # OpenPGP touch: scdaemon keeps the card busy -> repeated time extensions.
+    # Any other CryptoTokenKit line means the card answered -> touch is done.
+    /CryptoTokenKit/ {
+        if ($0 ~ /Time extension received/) {
+            if (!pgp) { post("OpenPGP"); pgp = 1 }
+        } else if (pgp) {
+            dismiss(); pgp = 0
+        }
+        next
+    }
+  '
