@@ -1,4 +1,6 @@
-# macos-yubikey-touch-notifier
+<img alt="macos-yubikey-touch-notifier" src="https://github.com/user-attachments/assets/d1dff8d0-f174-4f73-9f9f-1bd369e9022d" />
+
+# macOS Yubikey Touch Notifier
 
 macOS notification when your YubiKey is waiting for a touch.
 
