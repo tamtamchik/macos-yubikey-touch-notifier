@@ -4,28 +4,43 @@
 
 macOS notification when your YubiKey is waiting for a touch.
 
-The signal is the unified log. The script tails `log stream` and matches two
-cases:
+The signal is the unified log. Two cases are matched:
 
-- **FIDO2 / U2F** — a client that opened the YubiKey HID device calls `startQueue`.
-- **OpenPGP** — the smartcard stack (`CryptoTokenKit`) emits `Time extension received`.
+- **FIDO2 / U2F**: a client that opened the YubiKey HID device calls `startQueue`.
+- **OpenPGP**: the smartcard stack (`CryptoTokenKit`) emits `Time extension received`.
 
-A single shell script over `log` + `awk` +
-[`terminal-notifier`](https://github.com/julienXX/terminal-notifier) (it shows
-the icon and **withdraws the banner once you touch the key**).
+State is edge-triggered: a banner appears when a touch starts and withdraws once
+you touch the key.
 
 ## Install
+
+Download `YubiKeyTouchNotifier.zip` from the
+[latest release](https://github.com/tamtamchik/macos-yubikey-touch-notifier/releases/latest),
+unzip it, and move **YubiKey Touch Notifier.app** to `/Applications`.
+
+Open it once. macOS asks to allow notifications, and the app registers itself as
+a login item so it starts automatically afterwards. No Homebrew, no
+`terminal-notifier`, no `sudo`. The build is signed and notarized, so it opens
+without a Gatekeeper warning.
+
+Notifications come from the app's own signed bundle, so the banner shows its
+YubiKey icon instead of Terminal's.
+
+<details>
+<summary>Legacy: shell script + terminal-notifier</summary>
+
+A single shell script over `log` + `awk` +
+[`terminal-notifier`](https://github.com/julienXX/terminal-notifier). Same
+detection, delivered through `terminal-notifier` and a launchd agent.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/tamtamchik/macos-yubikey-touch-notifier/main/install.sh | bash
 ```
 
-Installs the latest published release (falls back to `main` if none exists).
 Needs [Homebrew](https://brew.sh) (for `terminal-notifier`) and asks for `sudo`
 to write into `/usr/local`.
 
-<details>
-<summary>Manual install</summary>
+Manual install:
 
 ```sh
 brew install terminal-notifier
@@ -38,45 +53,47 @@ cp com.tamtamchik.yubikey-touch-notifier.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.tamtamchik.yubikey-touch-notifier.plist
 ```
 
-</details>
+Run it in the foreground with `./yubikey-touch-notifier`. `YK_SOUND` sets the
+notification sound (default `Submarine`); `YK_SOUND=` mutes it. `YK_ICON`
+overrides the banner icon path.
 
-Perform a touch-required operation — a GPG signature (`echo test | gpg
---clearsign`), an SSH auth, or a WebAuthn login — and a "Touch your YubiKey"
-notification appears. (`gpg --card-status` does **not** request a touch, so it
-will not trigger one.)
-
-## Run in the foreground
-
-```sh
-./yubikey-touch-notifier
-```
-
-`YK_SOUND` sets the notification sound (default `Submarine`); `YK_SOUND=` mutes
-it. `YK_ICON` overrides the banner icon path.
-
-## Uninstall
+Uninstall:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/tamtamchik/macos-yubikey-touch-notifier/main/uninstall.sh | bash
 ```
 
-Removes the agent, binary, and icon (leaves `terminal-notifier` installed).
+</details>
 
-<details>
-<summary>Manual uninstall</summary>
+## Test it
+
+Perform a touch-required operation: a GPG signature (`echo test | gpg
+--clearsign`), an SSH auth, or a WebAuthn login. A "Touch your YubiKey"
+notification appears. (`gpg --card-status` does **not** request a touch, so it
+will not trigger one.)
+
+To post a sample banner without a real touch:
 
 ```sh
-launchctl unload ~/Library/LaunchAgents/com.tamtamchik.yubikey-touch-notifier.plist
-rm ~/Library/LaunchAgents/com.tamtamchik.yubikey-touch-notifier.plist
-sudo rm -rf /usr/local/bin/yubikey-touch-notifier /usr/local/share/yubikey-touch-notifier
+"/Applications/YubiKey Touch Notifier.app/Contents/MacOS/yubikey-touch-notifier" --test
 ```
 
-</details>
+## Uninstall
+
+```sh
+"/Applications/YubiKey Touch Notifier.app/Contents/MacOS/yubikey-touch-notifier" --uninstall
+```
+
+This deregisters the login item. Then drag the app to the Trash.
+
+## Build from source
+
+```sh
+./app/build.sh      # builds YubiKey Touch Notifier.app into ./build
+```
 
 ## Notes
 
 - Detection is heuristic, based on log messages, and may break on a future macOS
   release that renames them.
-- The first time a banner fires, macOS may ask you to allow notifications for
-  `terminal-notifier`. Focus modes suppress banners unless you allow that app in
-  the Focus settings.
+- Focus modes suppress banners unless you allow the app in the Focus settings.
