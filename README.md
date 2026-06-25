@@ -14,31 +14,24 @@ you touch the key.
 
 ## Install
 
-Download `YubiKeyTouchNotifier.zip` from the
-[latest release](https://github.com/tamtamchik/macos-yubikey-touch-notifier/releases/latest),
-unzip it, and move **YubiKey Touch Notifier.app** to `/Applications`.
+1. Download `YubiKeyTouchNotifier.zip` from the
+[latest release](https://github.com/tamtamchik/macos-yubikey-touch-notifier/releases/latest)
+2. Unzip it
+3. Move **YubiKey Touch Notifier.app** to `/Applications`.
+4. Open it once.
 
-Open it once. macOS asks to allow notifications, and the app registers itself as
-a login item so it starts automatically afterwards. No Homebrew, no
-`terminal-notifier`, no `sudo`. The release download is signed and notarized, so
-it opens without a Gatekeeper warning.
-
-Notifications come from the app's own signed bundle, so the banner shows its
-YubiKey icon instead of Terminal's.
+> [!NOTE]
+> macOS asks to allow notifications, and the app registers itself as a login item so it starts automatically afterwards.
+> The release download is signed and notarized, so it should open without a Gatekeeper warning.
 
 <details>
-<summary>Legacy: shell script + terminal-notifier</summary>
+<summary>Legacy: shell script + terminal-notifier install instructions</summary>
 
-A single shell script over `log` + `awk` +
-[`terminal-notifier`](https://github.com/julienXX/terminal-notifier). Same
-detection, delivered through `terminal-notifier` and a launchd agent.
+Install:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/tamtamchik/macos-yubikey-touch-notifier/main/install.sh | bash
 ```
-
-Needs [Homebrew](https://brew.sh) (for `terminal-notifier`) and asks for `sudo`
-to write into `/usr/local`.
 
 Manual install:
 
@@ -53,10 +46,6 @@ cp com.tamtamchik.yubikey-touch-notifier.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.tamtamchik.yubikey-touch-notifier.plist
 ```
 
-Run it in the foreground with `./yubikey-touch-notifier`. `YK_SOUND` sets the
-notification sound (default `Submarine`); `YK_SOUND=` mutes it. `YK_ICON`
-overrides the banner icon path.
-
 Uninstall:
 
 ```sh
@@ -67,12 +56,10 @@ curl -fsSL https://raw.githubusercontent.com/tamtamchik/macos-yubikey-touch-noti
 
 ## Test it
 
-Perform a touch-required operation: a GPG signature (`echo test | gpg
---clearsign`), an SSH auth, or a WebAuthn login. A "Touch your YubiKey"
-notification appears. (`gpg --card-status` does **not** request a touch, so it
-will not trigger one.)
+Perform a touch-required operation: a GPG signature (`echo test | gpg --clearsign`), an SSH auth, or a WebAuthn login. 
+A "Touch your YubiKey" notification appears.
 
-To post a sample banner without a real touch:
+To trigger a sample banner without a real touch:
 
 ```sh
 "/Applications/YubiKey Touch Notifier.app/Contents/MacOS/yubikey-touch-notifier" --test
@@ -85,8 +72,10 @@ To post a sample banner without a real touch:
 pkill -f "YubiKey Touch Notifier.app"
 ```
 
-`--uninstall` deregisters the login item; `pkill` stops the running agent (the
-Finder refuses to trash it while it is open). Then drag the app to the Trash.
+- `--uninstall` deregisters the login item; 
+- `pkill` stops the running agent (the Finder refuses to trash it while it is open).
+
+Then drag the app to the Trash.
 
 ## Build from source
 
