@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build and sign YubiKey Touch Notifier.app.
 #   CODESIGN_ID="Developer ID Application: ..." ./app/build.sh   # for release/notarization
-#   ./app/build.sh                                              # local dev (Apple Development)
+#   ./app/build.sh                                              # local dev (ad-hoc signature)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

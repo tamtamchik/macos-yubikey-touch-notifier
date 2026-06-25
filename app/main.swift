@@ -36,6 +36,7 @@ final class Notifier: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
     var ykclient = Set<String>()  // IOHIDLibUserClient ids that opened one
     var fido = false
     var pgp = false
+    var logProcess: Process?       // retained so the log stream outlives stream()
     let testMode = CommandLine.arguments.contains("--test")
 
     func applicationDidFinishLaunching(_: Notification) {
@@ -45,7 +46,7 @@ final class Notifier: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
 
         if testMode {
             // Clear any stale banner with our id first, else a re-add updates it silently.
-            center.removeAllDeliveredNotifications()
+            center.removeDeliveredNotifications(withIdentifiers: [groupID])
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.post("Test") }
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) { exit(0) }
             return
@@ -73,6 +74,7 @@ final class Notifier: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
     }
 
     func dismiss() {
+        center.removePendingNotificationRequests(withIdentifiers: [groupID])
         center.removeDeliveredNotifications(withIdentifiers: [groupID])
     }
 
@@ -106,7 +108,7 @@ final class Notifier: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
         var buf = Data()
         pipe.fileHandleForReading.readabilityHandler = { h in
             let d = h.availableData
-            if d.isEmpty { return }
+            if d.isEmpty { h.readabilityHandler = nil; return }  // EOF: stop the source
             buf.append(d)
             while let nl = buf.firstIndex(of: 0x0A) {
                 let lineData = buf.subdata(in: buf.startIndex..<nl)
@@ -116,7 +118,8 @@ final class Notifier: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
                 }
             }
         }
-        try? p.run()
+        do { try p.run() } catch { NSLog("yubikey-touch-notifier: log stream failed to start: \(error)"); return }
+        logProcess = p
     }
 
     // Streaming state machine, one rule per line (mirrors the awk original).

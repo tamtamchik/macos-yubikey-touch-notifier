@@ -20,8 +20,8 @@ unzip it, and move **YubiKey Touch Notifier.app** to `/Applications`.
 
 Open it once. macOS asks to allow notifications, and the app registers itself as
 a login item so it starts automatically afterwards. No Homebrew, no
-`terminal-notifier`, no `sudo`. The build is signed and notarized, so it opens
-without a Gatekeeper warning.
+`terminal-notifier`, no `sudo`. The release download is signed and notarized, so
+it opens without a Gatekeeper warning.
 
 Notifications come from the app's own signed bundle, so the banner shows its
 YubiKey icon instead of Terminal's.
