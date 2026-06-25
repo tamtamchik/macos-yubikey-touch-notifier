@@ -37,8 +37,10 @@ launchctl load ~/Library/LaunchAgents/com.tamtamchik.yubikey-touch-notifier.plis
 
 </details>
 
-Trigger any YubiKey touch (e.g. `gpg --card-status`, an SSH auth, a WebAuthn
-prompt) and a "Touch your YubiKey" notification appears.
+Perform a touch-required operation — a GPG signature (`echo test | gpg
+--clearsign`), an SSH auth, or a WebAuthn login — and a "Touch your YubiKey"
+notification appears. (`gpg --card-status` does **not** request a touch, so it
+will not trigger one.)
 
 ## Run in the foreground
 

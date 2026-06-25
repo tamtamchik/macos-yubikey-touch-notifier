@@ -28,4 +28,5 @@ curl -fsSL "$REPO/$LABEL.plist" -o "$PLIST"
 launchctl unload "$PLIST" 2>/dev/null || true
 launchctl load "$PLIST"
 
-echo "Done. Trigger a YubiKey touch (e.g. gpg --card-status) to test."
+echo "Done. Test it with a touch-required operation, e.g.:"
+echo "  echo test | gpg --clearsign >/dev/null"
