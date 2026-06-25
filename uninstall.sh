@@ -35,7 +35,7 @@ left=0
 for p in "$PLIST" "$BIN" "$SHARE"; do
     [ -e "$p" ] && { echo "Still present: $p" >&2; left=1; }
 done
-if launchctl list | grep -qF "$LABEL"; then
+if launchctl list "$LABEL" >/dev/null 2>&1; then
     echo "Still loaded: $LABEL" >&2
     left=1
 fi

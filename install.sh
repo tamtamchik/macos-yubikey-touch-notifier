@@ -57,8 +57,13 @@ echo "  $BIN"
 echo "  $SHARE/icon.png"
 echo "  $PLIST"
 
-# Confirm the agent actually registered with launchd.
-if launchctl list | grep -qF "$LABEL"; then
+# Confirm the agent registered. `launchctl load` is async, so retry over the brief window.
+loaded=0
+for _ in 1 2 3 4 5; do
+    launchctl list "$LABEL" >/dev/null 2>&1 && { loaded=1; break; }
+    sleep 0.3
+done
+if [ "$loaded" = 1 ]; then
     echo "Agent loaded: $LABEL"
 else
     echo "Warning: $LABEL did not load. Check $PLIST and /tmp/yubikey-touch-notifier.err" >&2
