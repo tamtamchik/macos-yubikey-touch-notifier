@@ -82,9 +82,11 @@ To post a sample banner without a real touch:
 
 ```sh
 "/Applications/YubiKey Touch Notifier.app/Contents/MacOS/yubikey-touch-notifier" --uninstall
+pkill -f "YubiKey Touch Notifier.app"
 ```
 
-This deregisters the login item. Then drag the app to the Trash.
+`--uninstall` deregisters the login item; `pkill` stops the running agent (the
+Finder refuses to trash it while it is open). Then drag the app to the Trash.
 
 ## Build from source
 

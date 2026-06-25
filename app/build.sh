@@ -19,6 +19,7 @@ xcrun actool app/AppIcon.icon \
     --app-icon AppIcon \
     --platform macosx \
     --minimum-deployment-target 13.0 \
+    --output-partial-info-plist build/icon-partial.plist \
     --errors --warnings --output-format human-readable-text >/dev/null
 
 cp app/Info.plist "$APP/Contents/Info.plist"
