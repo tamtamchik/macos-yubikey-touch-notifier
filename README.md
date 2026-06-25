@@ -15,6 +15,16 @@ the icon and **withdraws the banner once you touch the key**).
 ## Install
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/tamtamchik/macos-yubikey-touch-notifier/main/install.sh | bash
+```
+
+Needs [Homebrew](https://brew.sh) (for `terminal-notifier`) and asks for `sudo`
+to write into `/usr/local`.
+
+<details>
+<summary>Manual install</summary>
+
+```sh
 brew install terminal-notifier
 
 sudo install -m 755 yubikey-touch-notifier /usr/local/bin/yubikey-touch-notifier
@@ -24,6 +34,8 @@ sudo install -m 644 icon.png /usr/local/share/yubikey-touch-notifier/icon.png
 cp com.tamtamchik.yubikey-touch-notifier.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.tamtamchik.yubikey-touch-notifier.plist
 ```
+
+</details>
 
 Trigger any YubiKey touch (e.g. `gpg --card-status`, an SSH auth, a WebAuthn
 prompt) and a "Touch your YubiKey" notification appears.
