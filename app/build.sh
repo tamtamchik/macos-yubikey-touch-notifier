@@ -13,16 +13,13 @@ ID="${CODESIGN_ID:--}"
 rm -rf build
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-# icon.png (disc) -> native macOS squircle -> AppIcon.icns (standard iconset sizes).
-SQUIRCLE=build/AppIcon.png
-swift app/makeicon.swift icon.png "$SQUIRCLE"
-ICONSET=build/AppIcon.iconset
-mkdir -p "$ICONSET"
-for s in 16 32 128 256 512; do
-    sips -z $s $s "$SQUIRCLE" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
-    sips -z $((s * 2)) $((s * 2)) "$SQUIRCLE" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
-done
-iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
+# Compile the Icon Composer document into the bundle (Assets.car + AppIcon.icns).
+xcrun actool app/AppIcon.icon \
+    --compile "$APP/Contents/Resources" \
+    --app-icon AppIcon \
+    --platform macosx \
+    --minimum-deployment-target 13.0 \
+    --errors --warnings --output-format human-readable-text >/dev/null
 
 cp app/Info.plist "$APP/Contents/Info.plist"
 swiftc -O app/main.swift -o "$APP/Contents/MacOS/yubikey-touch-notifier"

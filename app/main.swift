@@ -44,7 +44,8 @@ final class Notifier: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
 
         if testMode {
-            // Post after auth has a moment to resolve; no login-item side effect.
+            // Clear any stale banner with our id first, else a re-add updates it silently.
+            center.removeAllDeliveredNotifications()
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.post("Test") }
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) { exit(0) }
             return
