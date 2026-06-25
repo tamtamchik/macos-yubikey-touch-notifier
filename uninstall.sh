@@ -32,7 +32,7 @@ left=0
 for p in "$PLIST" "$BIN" "$SHARE"; do
     [ -e "$p" ] && { echo "Still present: $p" >&2; left=1; }
 done
-if launchctl list | grep -q "$LABEL"; then
+if launchctl list | grep -qF "$LABEL"; then
     echo "Still loaded: $LABEL" >&2
     left=1
 fi
@@ -40,3 +40,6 @@ fi
 
 echo
 echo "terminal-notifier was left installed; remove it with: brew uninstall terminal-notifier"
+
+# Non-zero exit if anything survived, so callers/automation can react.
+exit "$left"

@@ -32,6 +32,7 @@ fi
 
 # Binary and icon live under $PREFIX, which needs root.
 echo "  [2/5] installing binary -> $BIN (sudo required)"
+sudo install -d "$PREFIX/bin"
 curl -fsSL "$REPO/yubikey-touch-notifier" | sudo tee "$BIN" >/dev/null
 sudo chmod 755 "$BIN"
 
@@ -55,7 +56,7 @@ echo "  $SHARE/icon.png"
 echo "  $PLIST"
 
 # Confirm the agent actually registered with launchd.
-if launchctl list | grep -q "$LABEL"; then
+if launchctl list | grep -qF "$LABEL"; then
     echo "Agent loaded: $LABEL"
 else
     echo "Warning: $LABEL did not load. Check $PLIST and /tmp/yubikey-touch-notifier.err" >&2
