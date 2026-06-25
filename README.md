@@ -1,4 +1,4 @@
-<img alt="macos-yubikey-touch-notifier" src="https://github.com/user-attachments/assets/d1dff8d0-f174-4f73-9f9f-1bd369e9022d" />
+<img alt="image" src="https://github.com/user-attachments/assets/cfd44ae2-5aa1-4b03-873d-b18ad88917f5" />
 
 # macOS Yubikey Touch Notifier
 
