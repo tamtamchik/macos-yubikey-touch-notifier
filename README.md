@@ -57,10 +57,21 @@ it. `YK_ICON` overrides the banner icon path.
 ## Uninstall
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/tamtamchik/macos-yubikey-touch-notifier/main/uninstall.sh | bash
+```
+
+Removes the agent, binary, and icon (leaves `terminal-notifier` installed).
+
+<details>
+<summary>Manual uninstall</summary>
+
+```sh
 launchctl unload ~/Library/LaunchAgents/com.tamtamchik.yubikey-touch-notifier.plist
 rm ~/Library/LaunchAgents/com.tamtamchik.yubikey-touch-notifier.plist
 sudo rm -rf /usr/local/bin/yubikey-touch-notifier /usr/local/share/yubikey-touch-notifier
 ```
+
+</details>
 
 ## Notes
 
