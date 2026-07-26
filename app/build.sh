@@ -18,12 +18,12 @@ xcrun actool app/AppIcon.icon \
     --compile "$APP/Contents/Resources" \
     --app-icon AppIcon \
     --platform macosx \
-    --minimum-deployment-target 13.0 \
+    --minimum-deployment-target 26.0 \
     --output-partial-info-plist build/icon-partial.plist \
     --errors --warnings --output-format human-readable-text >/dev/null
 
 cp app/Info.plist "$APP/Contents/Info.plist"
-swiftc -O app/main.swift -o "$APP/Contents/MacOS/yubikey-touch-notifier"
+swiftc -O -target arm64-apple-macosx26.0 app/main.swift -o "$APP/Contents/MacOS/yubikey-touch-notifier"
 
 # Hardened runtime so the same build is notarizable for release.
 codesign --force --options runtime --sign "$ID" "$APP"
