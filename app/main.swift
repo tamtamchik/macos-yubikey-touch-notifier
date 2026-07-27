@@ -17,9 +17,9 @@ import UserNotifications
 let groupID = "yk-touch"
 
 let pgpPredicate =
-    #"(processImagePath == "/System/Library/CryptoTokenKit/usbsmartcardreaderd.slotd/Contents/MacOS/usbsmartcardreaderd" AND subsystem == "com.apple.CryptoTokenKit" AND category == "ccid" AND eventMessage == "Time extension received")"#
+    #"(processImagePath == "/System/Library/CryptoTokenKit/usbsmartcardreaderd.slotd/Contents/MacOS/usbsmartcardreaderd" AND subsystem == "com.apple.CryptoTokenKit" AND category == "ccid")"#
 
-let pgpIdleTimeout: TimeInterval = 2
+let pgpRestartDelay: TimeInterval = 5
 let fidoIdleTimeout: TimeInterval = 2
 let fidoUsagePage = 0xf1d0
 let ctaphidKeepalive: UInt8 = 0xbb
@@ -60,7 +60,6 @@ struct FIDOChannel: Hashable {
 struct TouchState {
     var fidoWaiting = [FIDOChannel: UInt64]()
     var fidoGeneration: UInt64 = 0
-    var pgpGeneration: UInt64 = 0
     var pgpActive = false
 
     var notificationKind: String? {
@@ -95,17 +94,6 @@ struct TouchState {
     mutating func removeFIDODevice(_ deviceID: ObjectIdentifier) {
         fidoWaiting = fidoWaiting.filter { $0.key.deviceID != deviceID }
     }
-
-    mutating func extendPGP() -> UInt64 {
-        pgpGeneration += 1
-        pgpActive = true
-        return pgpGeneration
-    }
-
-    mutating func expirePGP(generation: UInt64) {
-        guard pgpGeneration == generation else { return }
-        pgpActive = false
-    }
 }
 
 func selfCheck() {
@@ -120,8 +108,9 @@ func selfCheck() {
     precondition(done == FIDOEvent(channel: 0x72a92870, needsTouch: false))
     precondition(continuation.withUnsafeBufferPointer { parseFIDOReport($0) } == nil)
     precondition(!isPGPExtension(#"Filtering using eventMessage == "Time extension received""#))
-    precondition(isPGPExtension(
-        "usbsmartcardreaderd[1:2] [com.apple.CryptoTokenKit:ccid] Time extension received"))
+    let pgpExtension =
+        "usbsmartcardreaderd[1:2] [com.apple.CryptoTokenKit:ccid] Time extension received"
+    precondition(isPGPExtension(pgpExtension))
 
     let firstDevice = NSObject()
     let secondDevice = NSObject()
@@ -142,21 +131,20 @@ func selfCheck() {
     state.expireFIDO(timeout.key, generation: timeout.generation)
     precondition(state.notificationKind == nil)
 
-    let oldPGP = state.extendPGP()
-    let currentPGP = state.extendPGP()
-    state.expirePGP(generation: oldPGP)
+    state.pgpActive = isPGPExtension(pgpExtension)
     precondition(state.notificationKind == "OpenPGP")
     state.handleFIDO(up!, deviceID: firstID)
     precondition(state.notificationKind == "FIDO2 + OpenPGP")
     state.handleFIDO(done!, deviceID: firstID)
     precondition(state.notificationKind == "OpenPGP")
-    state.expirePGP(generation: currentPGP)
+    state.pgpActive = isPGPExtension(
+        "usbsmartcardreaderd[1:2] [com.apple.CryptoTokenKit:ccid] Card response received")
     precondition(state.notificationKind == nil)
 }
 
 let fidoReportCallback: IOHIDReportCallback = { context, result, sender, type, reportID, report, count in
     guard result == kIOReturnSuccess, type == kIOHIDReportTypeInput, reportID == 0,
-        count >= 0, let context, let sender
+        count >= 7, let context, let sender
     else { return }
     guard let event = parseFIDOReport(UnsafeBufferPointer(start: report, count: min(count, 8))) else { return }
     let notifier = Unmanaged<Notifier>.fromOpaque(context).takeUnretainedValue()
@@ -251,20 +239,12 @@ final class Notifier: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
     }
 
     func addFIDODevice(_ device: IOHIDDevice) {
-        let key = ObjectIdentifier(device)
-        guard fidoDevices.insert(key).inserted else { return }
-        let result = IOHIDDeviceOpen(device, IOOptionBits(kIOHIDOptionsTypeNone))
-        guard result == kIOReturnSuccess else {
-            fidoDevices.remove(key)
-            NSLog("yubikey-touch-notifier: YubiKey FIDO interface failed to open: \(result)")
-            return
-        }
+        fidoDevices.insert(ObjectIdentifier(device))
     }
 
     func removeFIDODevice(_ device: IOHIDDevice) {
         let key = ObjectIdentifier(device)
         guard fidoDevices.remove(key) != nil else { return }
-        IOHIDDeviceClose(device, IOOptionBits(kIOHIDOptionsTypeNone))
         state.removeFIDODevice(key)
         refreshNotification()
     }
@@ -281,7 +261,14 @@ final class Notifier: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
         }
     }
 
+    func schedulePGPRestart() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + pgpRestartDelay) {
+            self.streamPGP()
+        }
+    }
+
     func streamPGP() {
+        guard logProcess == nil else { return }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/log")
         p.arguments = ["stream", "--level", "debug", "--style", "compact", "--predicate", pgpPredicate]
@@ -297,22 +284,39 @@ final class Notifier: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
                 let lineData = buf.subdata(in: buf.startIndex..<nl)
                 buf.removeSubrange(buf.startIndex...nl)
                 if let line = String(data: lineData, encoding: .utf8) {
-                    DispatchQueue.main.async { self.handlePGP(line) }
+                    DispatchQueue.main.async {
+                        guard self.logProcess === p else { return }
+                        self.handlePGP(line)
+                    }
                 }
             }
         }
-        do { try p.run() } catch { NSLog("yubikey-touch-notifier: log stream failed to start: \(error)"); return }
+        p.terminationHandler = { [weak self] process in
+            DispatchQueue.main.async {
+                guard let self, self.logProcess === process else { return }
+                self.logProcess = nil
+                self.state.pgpActive = false
+                self.refreshNotification()
+                NSLog(
+                    "yubikey-touch-notifier: log stream exited with status "
+                        + "\(process.terminationStatus); restarting")
+                self.schedulePGPRestart()
+            }
+        }
+        do {
+            try p.run()
+        } catch {
+            pipe.fileHandleForReading.readabilityHandler = nil
+            NSLog("yubikey-touch-notifier: log stream failed to start: \(error); restarting")
+            schedulePGPRestart()
+            return
+        }
         logProcess = p
     }
 
     func handlePGP(_ line: String) {
-        guard isPGPExtension(line) else { return }
-        let generation = state.extendPGP()
+        state.pgpActive = isPGPExtension(line)
         refreshNotification()
-        DispatchQueue.main.asyncAfter(deadline: .now() + pgpIdleTimeout) {
-            self.state.expirePGP(generation: generation)
-            self.refreshNotification()
-        }
     }
 }
 
