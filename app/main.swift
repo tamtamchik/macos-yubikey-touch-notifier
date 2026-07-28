@@ -1,10 +1,8 @@
 // Native macOS agent that notifies when a YubiKey is waiting for a touch.
 //
-// Detection mirrors the original shell tool: it streams the macOS unified log
-// and matches two cases —
-//   FIDO2/U2F  a client that opened the YubiKey HID device calls startQueue
-//   OpenPGP    CryptoTokenKit emits "Time extension received"
-// State is edge-triggered: notify once when a touch starts, withdraw when done.
+// Detection uses two native macOS signals —
+//   FIDO2/U2F  CTAPHID KEEPALIVE reports that request user presence
+//   OpenPGP    the system CCID reader emits "Time extension received"
 //
 // Unlike terminal-notifier, notifications come from THIS signed bundle, so the
 // banner shows this app's icon (not Terminal's) and the system attributes the
@@ -12,48 +10,181 @@
 
 import AppKit
 import Foundation
+import IOKit.hid
 import ServiceManagement
 import UserNotifications
 
 let groupID = "yk-touch"
 
-let predicate =
-    #"(processImagePath == "/kernel" AND senderImagePath ENDSWITH "IOHIDFamily") OR (subsystem CONTAINS "CryptoTokenKit")"#
+let pgpPredicate =
+    #"(processImagePath == "/System/Library/CryptoTokenKit/usbsmartcardreaderd.slotd/Contents/MacOS/usbsmartcardreaderd" AND subsystem == "com.apple.CryptoTokenKit" AND category == "ccid")"#
 
-// First capture group of the first match, or nil.
-func capture(_ pattern: String, _ s: String) -> String? {
-    guard let re = try? NSRegularExpression(pattern: pattern) else { return nil }
-    let range = NSRange(s.startIndex..., in: s)
-    guard let m = re.firstMatch(in: s, range: range), m.numberOfRanges > 1,
-        let g = Range(m.range(at: 1), in: s)
-    else { return nil }
-    return String(s[g])
+let pgpRestartDelay: TimeInterval = 5
+let fidoIdleTimeout: TimeInterval = 2
+let fidoUsagePage = 0xf1d0
+let ctaphidKeepalive: UInt8 = 0xbb
+let ctaphidUpNeeded: UInt8 = 0x02
+let maxFIDOChannels = 64
+
+struct FIDOEvent: Equatable {
+    let channel: UInt32
+    let needsTouch: Bool
+}
+
+func parseFIDOReport(_ report: UnsafeBufferPointer<UInt8>) -> FIDOEvent? {
+    guard report.count >= 7, report[4] & 0x80 != 0 else { return nil }
+    let channel =
+        UInt32(report[0]) << 24 | UInt32(report[1]) << 16
+        | UInt32(report[2]) << 8 | UInt32(report[3])
+
+    guard report[4] == ctaphidKeepalive else {
+        return FIDOEvent(channel: channel, needsTouch: false)
+    }
+    guard report.count >= 8, report[5] == 0, report[6] == 1 else { return nil }
+    switch report[7] {
+    case ctaphidUpNeeded: return FIDOEvent(channel: channel, needsTouch: true)
+    case 0x01: return FIDOEvent(channel: channel, needsTouch: false)
+    default: return nil
+    }
+}
+
+func isPGPExtension(_ line: String) -> Bool {
+    line.hasSuffix("[com.apple.CryptoTokenKit:ccid] Time extension received")
+}
+
+struct FIDOChannel: Hashable {
+    let deviceID: ObjectIdentifier
+    let channel: UInt32
+}
+
+struct TouchState {
+    var fidoWaiting = [FIDOChannel: UInt64]()
+    var fidoGeneration: UInt64 = 0
+    var pgpActive = false
+
+    var notificationKind: String? {
+        switch (!fidoWaiting.isEmpty, pgpActive) {
+        case (true, true): "FIDO2 + OpenPGP"
+        case (true, false): "FIDO2"
+        case (false, true): "OpenPGP"
+        case (false, false): nil
+        }
+    }
+
+    @discardableResult mutating func handleFIDO(
+        _ event: FIDOEvent, deviceID: ObjectIdentifier
+    ) -> (key: FIDOChannel, generation: UInt64)? {
+        let key = FIDOChannel(deviceID: deviceID, channel: event.channel)
+        if event.needsTouch {
+            guard fidoWaiting[key] != nil || fidoWaiting.count < maxFIDOChannels else { return nil }
+            fidoGeneration += 1
+            fidoWaiting[key] = fidoGeneration
+            return (key, fidoGeneration)
+        } else {
+            fidoWaiting.removeValue(forKey: key)
+            return nil
+        }
+    }
+
+    mutating func expireFIDO(_ key: FIDOChannel, generation: UInt64) {
+        guard fidoWaiting[key] == generation else { return }
+        fidoWaiting.removeValue(forKey: key)
+    }
+
+    mutating func removeFIDODevice(_ deviceID: ObjectIdentifier) {
+        fidoWaiting = fidoWaiting.filter { $0.key.deviceID != deviceID }
+    }
+}
+
+func selfCheck() {
+    let keepalive = [0x72, 0xa9, 0x28, 0x70, 0xbb, 0x00, 0x01, 0x02] as [UInt8]
+    let processing = [0x72, 0xa9, 0x28, 0x70, 0xbb, 0x00, 0x01, 0x01] as [UInt8]
+    let completed = [0x72, 0xa9, 0x28, 0x70, 0x90, 0x00, 0x01, 0x2e] as [UInt8]
+    let continuation = [0x72, 0xa9, 0x28, 0x70, 0x00, 0x00, 0x00, 0x00] as [UInt8]
+    let up = keepalive.withUnsafeBufferPointer { parseFIDOReport($0) }
+    let done = completed.withUnsafeBufferPointer { parseFIDOReport($0) }
+    precondition(up == FIDOEvent(channel: 0x72a92870, needsTouch: true))
+    precondition(processing.withUnsafeBufferPointer { parseFIDOReport($0) }?.needsTouch == false)
+    precondition(done == FIDOEvent(channel: 0x72a92870, needsTouch: false))
+    precondition(continuation.withUnsafeBufferPointer { parseFIDOReport($0) } == nil)
+    precondition(!isPGPExtension(#"Filtering using eventMessage == "Time extension received""#))
+    let pgpExtension =
+        "usbsmartcardreaderd[1:2] [com.apple.CryptoTokenKit:ccid] Time extension received"
+    precondition(isPGPExtension(pgpExtension))
+
+    let firstDevice = NSObject()
+    let secondDevice = NSObject()
+    let firstID = ObjectIdentifier(firstDevice)
+    let secondID = ObjectIdentifier(secondDevice)
+    var state = TouchState()
+    let stale = state.handleFIDO(up!, deviceID: firstID)!
+    let current = state.handleFIDO(up!, deviceID: firstID)!
+    state.expireFIDO(stale.key, generation: stale.generation)
+    state.handleFIDO(FIDOEvent(channel: 7, needsTouch: true), deviceID: secondID)
+    state.handleFIDO(done!, deviceID: firstID)
+    precondition(state.notificationKind == "FIDO2")
+    state.expireFIDO(current.key, generation: current.generation)
+    state.removeFIDODevice(secondID)
+    precondition(state.notificationKind == nil)
+
+    let timeout = state.handleFIDO(up!, deviceID: firstID)!
+    state.expireFIDO(timeout.key, generation: timeout.generation)
+    precondition(state.notificationKind == nil)
+
+    state.pgpActive = isPGPExtension(pgpExtension)
+    precondition(state.notificationKind == "OpenPGP")
+    state.handleFIDO(up!, deviceID: firstID)
+    precondition(state.notificationKind == "FIDO2 + OpenPGP")
+    state.handleFIDO(done!, deviceID: firstID)
+    precondition(state.notificationKind == "OpenPGP")
+    state.pgpActive = isPGPExtension(
+        "usbsmartcardreaderd[1:2] [com.apple.CryptoTokenKit:ccid] Card response received")
+    precondition(state.notificationKind == nil)
+}
+
+let fidoReportCallback: IOHIDReportCallback = { context, result, sender, type, reportID, report, count in
+    guard result == kIOReturnSuccess, type == kIOHIDReportTypeInput, reportID == 0,
+        count >= 7, let context, let sender
+    else { return }
+    guard let event = parseFIDOReport(UnsafeBufferPointer(start: report, count: min(count, 8))) else { return }
+    let notifier = Unmanaged<Notifier>.fromOpaque(context).takeUnretainedValue()
+    let device = unsafeBitCast(sender, to: IOHIDDevice.self)
+    notifier.handleFIDO(event, deviceID: ObjectIdentifier(device))
+}
+
+let fidoDeviceMatched: IOHIDDeviceCallback = { context, result, _, device in
+    guard result == kIOReturnSuccess, let context else { return }
+    Unmanaged<Notifier>.fromOpaque(context).takeUnretainedValue().addFIDODevice(device)
+}
+
+let fidoDeviceRemoved: IOHIDDeviceCallback = { context, _, _, device in
+    guard let context else { return }
+    Unmanaged<Notifier>.fromOpaque(context).takeUnretainedValue().removeFIDODevice(device)
 }
 
 final class Notifier: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     let center = UNUserNotificationCenter.current()
-    var ykdev = Set<String>()     // IORegistryEntryIDs of YubiKey HID devices
-    var ykclient = Set<String>()  // IOHIDLibUserClient ids that opened one
-    var fido = false
-    var pgp = false
-    var logProcess: Process?       // retained so the log stream outlives stream()
+    var state = TouchState()
+    var displayedKind: String?
+    var logProcess: Process?
+    var hidManager: IOHIDManager?
+    var fidoDevices = Set<ObjectIdentifier>()
     let testMode = CommandLine.arguments.contains("--test")
 
     func applicationDidFinishLaunching(_: Notification) {
         NSApp.setActivationPolicy(.accessory)
         center.delegate = self
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        dismiss()
 
         if testMode {
-            // Clear any stale banner with our id first, else a re-add updates it silently.
-            center.removeDeliveredNotifications(withIdentifiers: [groupID])
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.post("Test") }
             DispatchQueue.main.asyncAfter(deadline: .now() + 4) { exit(0) }
             return
         }
         try? SMAppService.mainApp.register()
-        seed()
-        stream()
+        startFIDO()
+        streamPGP()
     }
 
     // Show banners even though we run as a background agent.
@@ -78,30 +209,69 @@ final class Notifier: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
         center.removeDeliveredNotifications(withIdentifiers: [groupID])
     }
 
-    // YubiKeys (Yubico vendor 0x1050 = 4176) already attached before we start.
-    // Live plug-ins are picked up from the log; pre-existing ones only from ioreg.
-    func seed() {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/sbin/ioreg")
-        p.arguments = ["-r", "-c", "AppleUserUSBHostHIDDevice", "-d", "1"]
-        let pipe = Pipe()
-        p.standardOutput = pipe
-        p.standardError = FileHandle.nullDevice
-        guard (try? p.run()) != nil else { return }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        guard let out = String(data: data, encoding: .utf8) else { return }
-        var curID: String?
-        for line in out.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
-            if line.contains("+-o ") { curID = capture(#"id (0x[0-9a-f]+)"#, line) }
-            if line.contains("\"VendorID\" = 4176"), let id = curID { ykdev.insert(id) }
+    func refreshNotification() {
+        let kind = state.notificationKind
+        guard kind != displayedKind else { return }
+        displayedKind = kind
+        if let kind { post(kind) } else { dismiss() }
+    }
+
+    func startFIDO() {
+        let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
+        let match: [String: Any] = [
+            kIOHIDVendorIDKey as String: 0x1050,
+            kIOHIDDeviceUsagePageKey as String: fidoUsagePage,
+            kIOHIDDeviceUsageKey as String: 1,
+        ]
+        let context = Unmanaged.passUnretained(self).toOpaque()
+        IOHIDManagerSetDeviceMatching(manager, match as CFDictionary)
+        IOHIDManagerRegisterDeviceMatchingCallback(manager, fidoDeviceMatched, context)
+        IOHIDManagerRegisterDeviceRemovalCallback(manager, fidoDeviceRemoved, context)
+        IOHIDManagerRegisterInputReportCallback(manager, fidoReportCallback, context)
+        IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+        let result = IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
+        guard result == kIOReturnSuccess else {
+            IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
+            NSLog("yubikey-touch-notifier: FIDO monitor failed to start: \(result)")
+            return
+        }
+        hidManager = manager
+    }
+
+    func addFIDODevice(_ device: IOHIDDevice) {
+        fidoDevices.insert(ObjectIdentifier(device))
+    }
+
+    func removeFIDODevice(_ device: IOHIDDevice) {
+        let key = ObjectIdentifier(device)
+        guard fidoDevices.remove(key) != nil else { return }
+        state.removeFIDODevice(key)
+        refreshNotification()
+    }
+
+    func handleFIDO(_ event: FIDOEvent, deviceID: ObjectIdentifier) {
+        guard fidoDevices.contains(deviceID) else { return }
+        let expiry = state.handleFIDO(event, deviceID: deviceID)
+        refreshNotification()
+        if let expiry {
+            DispatchQueue.main.asyncAfter(deadline: .now() + fidoIdleTimeout) {
+                self.state.expireFIDO(expiry.key, generation: expiry.generation)
+                self.refreshNotification()
+            }
         }
     }
 
-    func stream() {
+    func schedulePGPRestart() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + pgpRestartDelay) {
+            self.streamPGP()
+        }
+    }
+
+    func streamPGP() {
+        guard logProcess == nil else { return }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/log")
-        p.arguments = ["stream", "--level", "debug", "--style", "compact", "--predicate", predicate]
+        p.arguments = ["stream", "--level", "debug", "--style", "compact", "--predicate", pgpPredicate]
         let pipe = Pipe()
         p.standardOutput = pipe
         p.standardError = FileHandle.nullDevice
@@ -114,51 +284,46 @@ final class Notifier: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
                 let lineData = buf.subdata(in: buf.startIndex..<nl)
                 buf.removeSubrange(buf.startIndex...nl)
                 if let line = String(data: lineData, encoding: .utf8) {
-                    DispatchQueue.main.async { self.handle(line) }
+                    DispatchQueue.main.async {
+                        guard self.logProcess === p else { return }
+                        self.handlePGP(line)
+                    }
                 }
             }
         }
-        do { try p.run() } catch { NSLog("yubikey-touch-notifier: log stream failed to start: \(error)"); return }
+        p.terminationHandler = { [weak self] process in
+            DispatchQueue.main.async {
+                guard let self, self.logProcess === process else { return }
+                self.logProcess = nil
+                self.state.pgpActive = false
+                self.refreshNotification()
+                NSLog(
+                    "yubikey-touch-notifier: log stream exited with status "
+                        + "\(process.terminationStatus); restarting")
+                self.schedulePGPRestart()
+            }
+        }
+        do {
+            try p.run()
+        } catch {
+            pipe.fileHandleForReading.readabilityHandler = nil
+            NSLog("yubikey-touch-notifier: log stream failed to start: \(error); restarting")
+            schedulePGPRestart()
+            return
+        }
         logProcess = p
     }
 
-    // Streaming state machine, one rule per line (mirrors the awk original).
-    func handle(_ line: String) {
-        // A YubiKey HID device registering -> remember its registry id.
-        if line.contains("IORegistryEntryID"),
-            line.contains(">Yubico<") || capture(#"(VendorID</key><integer[^>]*>0x1050<)"#, line) != nil
-        {
-            if let id = capture(#"IORegistryEntryID</key><integer[^>]*>([^<]+)<"#, line) { ykdev.insert(id) }
-            return
-        }
-        // Client that opened a YubiKey HID device (ignore other devices).
-        if line.contains(" open by IOHIDLibUserClient:"),
-            let dev = capture(#"AppleUserUSBHostHIDDevice:(0x[0-9a-f]+) open by"#, line),
-            let cli = capture(#"open by IOHIDLibUserClient:(0x[0-9a-f]+)"#, line)
-        {
-            if ykdev.contains(dev) { ykclient.insert(cli) }
-            return
-        }
-        // FIDO2 touch begins / ends for one of those clients.
-        if let cli = capture(#"IOHIDLibUserClient:(0x[0-9a-f]+) startQueue"#, line) {
-            if ykclient.contains(cli), !fido { post("FIDO2"); fido = true }
-            return
-        }
-        if let cli = capture(#"IOHIDLibUserClient:(0x[0-9a-f]+) stopQueue"#, line) {
-            if ykclient.contains(cli), fido { dismiss(); fido = false }
-            return
-        }
-        // OpenPGP: scdaemon keeps the card busy -> repeated time extensions.
-        // Any other CryptoTokenKit line means the card answered -> touch done.
-        if line.contains("CryptoTokenKit") {
-            if line.contains("Time extension received") {
-                if !pgp { post("OpenPGP"); pgp = true }
-            } else if pgp {
-                dismiss()
-                pgp = false
-            }
-        }
+    func handlePGP(_ line: String) {
+        state.pgpActive = isPGPExtension(line)
+        refreshNotification()
     }
+}
+
+if CommandLine.arguments.contains("--self-check") {
+    selfCheck()
+    print("self-check passed")
+    exit(0)
 }
 
 if CommandLine.arguments.contains("--uninstall") {

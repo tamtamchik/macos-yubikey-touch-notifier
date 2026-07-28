@@ -4,13 +4,15 @@
 
 macOS notification when your YubiKey is waiting for a touch.
 
-The signal is the unified log. Two cases are matched:
+> [!IMPORTANT]
+> Requires **macOS 26.0 or later** on **Apple Silicon**. Intel Macs are not supported.
 
-- **FIDO2 / U2F**: a client that opened the YubiKey HID device calls `startQueue`.
+Two native signals are matched:
+
+- **FIDO2 / U2F**: the YubiKey sends a CTAPHID `KEEPALIVE` report requesting user presence.
 - **OpenPGP**: the smartcard stack (`CryptoTokenKit`) emits `Time extension received`.
 
-State is edge-triggered: a banner appears when a touch starts and withdraws once
-you touch the key.
+A banner appears while the key is waiting and withdraws when the operation ends.
 
 ## Install
 
@@ -24,35 +26,8 @@ you touch the key.
 > macOS asks to allow notifications, and the app registers itself as a login item so it starts automatically afterwards.
 > The release download is signed and notarized, so it should open without a Gatekeeper warning.
 
-<details>
-<summary>Legacy: shell script + terminal-notifier install instructions</summary>
-
-Install:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/tamtamchik/macos-yubikey-touch-notifier/main/install.sh | bash
-```
-
-Manual install:
-
-```sh
-brew install terminal-notifier
-
-sudo install -m 755 yubikey-touch-notifier /usr/local/bin/yubikey-touch-notifier
-sudo install -d /usr/local/share/yubikey-touch-notifier
-sudo install -m 644 icon.png /usr/local/share/yubikey-touch-notifier/icon.png
-
-cp com.tamtamchik.yubikey-touch-notifier.plist ~/Library/LaunchAgents/
-launchctl load ~/Library/LaunchAgents/com.tamtamchik.yubikey-touch-notifier.plist
-```
-
-Uninstall:
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/tamtamchik/macos-yubikey-touch-notifier/main/uninstall.sh | bash
-```
-
-</details>
+The legacy shell scripts remain in the repository for historical reference.
+They are unsupported and do not include the macOS 26 signal handling.
 
 ## Test it
 
@@ -79,12 +54,15 @@ Then drag the app to the Trash.
 
 ## Build from source
 
+The build requires Xcode 26 and produces an arm64 app for macOS 26.0 or later.
+Intel Macs are not supported.
+
 ```sh
 ./app/build.sh      # builds YubiKey Touch Notifier.app into ./build
 ```
 
 ## Notes
 
-- Detection is heuristic, based on log messages, and may break on a future macOS
-  release that renames them.
+- OpenPGP detection is heuristic and may break if a future macOS release renames
+  its CryptoTokenKit log message.
 - Focus modes suppress banners unless you allow the app in the Focus settings.
