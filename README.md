@@ -1,4 +1,5 @@
-<img alt="image" src="https://github.com/user-attachments/assets/55cb1b65-72d5-4ea7-9385-e35c408b0f05" />
+<img alt="macOS Yubikey Touch Notifier" src="https://github.com/user-attachments/assets/9089c01a-9fe4-476b-afdc-951f9fa6c8b4" />
+
 
 # macOS Yubikey Touch Notifier
 
