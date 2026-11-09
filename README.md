@@ -27,9 +27,6 @@ A banner appears while the key is waiting and withdraws when the operation ends.
 > macOS asks to allow notifications, and the app registers itself as a login item so it starts automatically afterwards.
 > The release download is signed and notarized, so it should open without a Gatekeeper warning.
 
-The legacy shell scripts remain in the repository for historical reference.
-They are unsupported and do not include the macOS 26 signal handling.
-
 ## Test it
 
 Perform a touch-required operation: a GPG signature (`echo test | gpg --clearsign`), an SSH auth, or a WebAuthn login. 

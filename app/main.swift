@@ -4,9 +4,8 @@
 //   FIDO2/U2F  CTAPHID KEEPALIVE reports that request user presence
 //   OpenPGP    the system CCID reader emits "Time extension received"
 //
-// Unlike terminal-notifier, notifications come from THIS signed bundle, so the
-// banner shows this app's icon (not Terminal's) and the system attributes the
-// login item to it.
+// Notifications come from this signed bundle, so the banner shows this app's
+// icon and the system attributes the login item to it.
 
 import AppKit
 import Foundation
