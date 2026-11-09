@@ -4,6 +4,9 @@
 //   FIDO2/U2F  CTAPHID KEEPALIVE reports that request user presence
 //   OpenPGP    the system CCID reader emits "Time extension received"
 //
+// The banner subtitle names the waiting process: the HID user client creator
+// for FIDO2, the gpg-agent socket client for OpenPGP.
+//
 // Notifications come from this signed bundle, so the banner shows this app's
 // icon and the system attributes the login item to it.
 
@@ -24,6 +27,22 @@ let fidoUsagePage = 0xf1d0
 let ctaphidKeepalive: UInt8 = 0xbb
 let ctaphidUpNeeded: UInt8 = 0x02
 let maxFIDOChannels = 64
+
+let agents = [
+    "claude": "Claude Code",
+    "codex": "Codex",
+    "gemini": "Gemini CLI",
+    "copilot": "Copilot CLI",
+    "cursor-agent": "Cursor",
+    "Cursor": "Cursor",
+    "Windsurf": "Windsurf",
+    "opencode": "OpenCode",
+    "aider": "Aider",
+    "amp": "Amp",
+    "goose": "Goose",
+    "droid": "Droid",
+    "qwen": "Qwen Code",
+]
 
 struct FIDOEvent: Equatable {
     let channel: UInt32
@@ -95,6 +114,97 @@ struct TouchState {
     }
 }
 
+func cString<T>(_ tuple: T) -> String {
+    withUnsafeBytes(of: tuple) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+}
+
+func creatorPID(_ creator: String) -> pid_t? {
+    guard creator.hasPrefix("pid ") else { return nil }
+    return pid_t(creator.dropFirst(4).prefix { $0.isNumber })
+}
+
+func agentName(executable: String, argv: [String]) -> String? {
+    let app = executable.split(separator: "/").first { $0.hasSuffix(".app") }.map { String($0.dropLast(4)) }
+    let names = argv.prefix(2).map { ($0 as NSString).lastPathComponent } + [app].compactMap { $0 }
+    return names.lazy.compactMap { agents[$0] }.first
+}
+
+func bsdInfo(_ pid: pid_t) -> proc_bsdinfo? {
+    var info = proc_bsdinfo()
+    let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+    return proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size ? info : nil
+}
+
+func processArgs(_ pid: pid_t) -> (executable: String, argv: [String])? {
+    var mib = [CTL_KERN, KERN_PROCARGS2, pid]
+    var size = 0
+    guard sysctl(&mib, 3, nil, &size, nil, 0) == 0 else { return nil }
+    var buf = [UInt8](repeating: 0, count: size)
+    guard sysctl(&mib, 3, &buf, &size, nil, 0) == 0, size > 4 else { return nil }
+    let argc = buf.withUnsafeBytes { $0.load(as: Int32.self) }
+    let strings = buf[4..<size].split(separator: 0).map { String(decoding: $0, as: UTF8.self) }
+    guard let executable = strings.first else { return nil }
+    return (executable, Array(strings.dropFirst().prefix(Int(argc))))
+}
+
+func describeRequester(_ pids: [pid_t]) -> String? {
+    let started = pids.compactMap { pid in bsdInfo(pid).map { (pid, $0.pbi_start_tvsec, $0.pbi_start_tvusec) } }
+    guard var pid = started.max(by: { ($0.1, $0.2) < ($1.1, $1.2) })?.0 else { return nil }
+    var chain = [String]()
+    var agent: String?
+    while pid > 1, let info = bsdInfo(pid) {
+        if chain.count < 2 { chain.append(cString(info.pbi_name)) }
+        if agent == nil, let args = processArgs(pid) { agent = agentName(executable: args.executable, argv: args.argv) }
+        pid = pid_t(info.pbi_ppid)
+    }
+    guard !chain.isEmpty else { return nil }
+    let path = chain.joined(separator: " ← ")
+    return agent.map { "\($0): \(path)" } ?? path
+}
+
+func fidoClientPIDs(_ device: IOHIDDevice) -> [pid_t] {
+    var iterator = io_iterator_t()
+    guard IORegistryEntryGetChildIterator(IOHIDDeviceGetService(device), kIOServicePlane, &iterator) == KERN_SUCCESS
+    else { return [] }
+    defer { IOObjectRelease(iterator) }
+    var pids = [pid_t]()
+    var child = IOIteratorNext(iterator)
+    while child != 0 {
+        if let creator = IORegistryEntryCreateCFProperty(child, "IOUserClientCreator" as CFString, nil, 0)?
+            .takeRetainedValue() as? String, let pid = creatorPID(creator), pid != getpid()
+        {
+            pids.append(pid)
+        }
+        IOObjectRelease(child)
+        child = IOIteratorNext(iterator)
+    }
+    return pids
+}
+
+func hasGPGAgentConnection(_ pid: pid_t) -> Bool {
+    let size = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
+    guard size > 0 else { return false }
+    var fds = [proc_fdinfo](repeating: proc_fdinfo(), count: Int(size) / MemoryLayout<proc_fdinfo>.stride)
+    let filled = Int(proc_pidinfo(pid, PROC_PIDLISTFDS, 0, &fds, size)) / MemoryLayout<proc_fdinfo>.stride
+    return fds.prefix(filled).contains { fd in
+        var info = socket_fdinfo()
+        let infoSize = Int32(MemoryLayout<socket_fdinfo>.size)
+        guard fd.proc_fdtype == PROX_FDTYPE_SOCKET,
+            proc_pidfdinfo(pid, fd.proc_fd, PROC_PIDFDSOCKETINFO, &info, infoSize) == infoSize,
+            info.psi.soi_family == AF_UNIX
+        else { return false }
+        return cString(info.psi.soi_proto.pri_un.unsi_caddr.ua_sun.sun_path).contains("/S.gpg-agent")
+    }
+}
+
+func gpgAgentClientPIDs() -> [pid_t] {
+    let uid = getuid()
+    let size = proc_listpids(UInt32(PROC_UID_ONLY), uid, nil, 0)
+    var pids = [pid_t](repeating: 0, count: Int(size) / MemoryLayout<pid_t>.stride)
+    let count = Int(proc_listpids(UInt32(PROC_UID_ONLY), uid, &pids, size)) / MemoryLayout<pid_t>.stride
+    return pids.prefix(count).filter { $0 > 0 && hasGPGAgentConnection($0) }
+}
+
 func selfCheck() {
     let keepalive = [0x72, 0xa9, 0x28, 0x70, 0xbb, 0x00, 0x01, 0x02] as [UInt8]
     let processing = [0x72, 0xa9, 0x28, 0x70, 0xbb, 0x00, 0x01, 0x01] as [UInt8]
@@ -139,6 +249,14 @@ func selfCheck() {
     state.pgpActive = isPGPExtension(
         "usbsmartcardreaderd[1:2] [com.apple.CryptoTokenKit:ccid] Card response received")
     precondition(state.notificationKind == nil)
+
+    precondition(creatorPID("pid 1742, yubikey-touch-no") == 1742)
+    precondition(agentName(executable: "/opt/homebrew/bin/node", argv: ["node", "/opt/homebrew/bin/gemini"]) == "Gemini CLI")
+    precondition(
+        agentName(
+            executable: "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper (Plugin).app/Contents/MacOS/Cursor Helper (Plugin)",
+            argv: []) == "Cursor")
+    precondition(agentName(executable: "/bin/zsh", argv: ["-zsh"]) == nil)
 }
 
 let fidoReportCallback: IOHIDReportCallback = { context, result, sender, type, reportID, report, count in
@@ -167,7 +285,7 @@ final class Notifier: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
     var displayedKind: String?
     var logProcess: Process?
     var hidManager: IOHIDManager?
-    var fidoDevices = Set<ObjectIdentifier>()
+    var fidoDevices = [ObjectIdentifier: IOHIDDevice]()
     let testMode = CommandLine.arguments.contains("--test")
 
     func applicationDidFinishLaunching(_: Notification) {
@@ -197,10 +315,17 @@ final class Notifier: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
     func post(_ kind: String) {
         let c = UNMutableNotificationContent()
         c.title = "YubiKey \(kind)"
+        c.subtitle = requester() ?? ""
         c.body = "Touch your YubiKey"
         c.sound = .default
         // Fixed identifier so a later add replaces, and dismiss can remove it.
         center.add(UNNotificationRequest(identifier: groupID, content: c, trigger: nil))
+    }
+
+    func requester() -> String? {
+        var pids = state.fidoWaiting.keys.compactMap { fidoDevices[$0.deviceID] }.flatMap(fidoClientPIDs)
+        if state.pgpActive { pids += gpgAgentClientPIDs() }
+        return describeRequester(pids)
     }
 
     func dismiss() {
@@ -238,18 +363,18 @@ final class Notifier: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
     }
 
     func addFIDODevice(_ device: IOHIDDevice) {
-        fidoDevices.insert(ObjectIdentifier(device))
+        fidoDevices[ObjectIdentifier(device)] = device
     }
 
     func removeFIDODevice(_ device: IOHIDDevice) {
         let key = ObjectIdentifier(device)
-        guard fidoDevices.remove(key) != nil else { return }
+        guard fidoDevices.removeValue(forKey: key) != nil else { return }
         state.removeFIDODevice(key)
         refreshNotification()
     }
 
     func handleFIDO(_ event: FIDOEvent, deviceID: ObjectIdentifier) {
-        guard fidoDevices.contains(deviceID) else { return }
+        guard fidoDevices[deviceID] != nil else { return }
         let expiry = state.handleFIDO(event, deviceID: deviceID)
         refreshNotification()
         if let expiry {
