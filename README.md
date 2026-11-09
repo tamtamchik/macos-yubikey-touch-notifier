@@ -15,7 +15,7 @@ Two native signals are matched:
 
 A banner appears while the key is waiting and withdraws when the operation ends.
 
-The banner subtitle names the process that asked for the touch and its parent, e.g. `ssh-keygen ← git`.
+The banner names the process that asked for the touch and its parent, e.g. `ssh-keygen ← git`.
 If an AI agent (Claude Code, Codex, Gemini CLI, Copilot CLI, Cursor, OpenCode, Aider and others) started it, the agent comes first: `Claude Code: ssh-keygen ← git`.
 
 ## Install
@@ -33,7 +33,7 @@ If an AI agent (Claude Code, Codex, Gemini CLI, Copilot CLI, Cursor, OpenCode, A
 ## Test it
 
 Perform a touch-required operation: a GPG signature (`echo test | gpg --clearsign`), an SSH auth, or a WebAuthn login. 
-A "Touch your YubiKey" notification appears.
+A "YubiKey OpenPGP" or "YubiKey FIDO2" notification appears.
 
 To trigger a sample banner without a real touch:
 

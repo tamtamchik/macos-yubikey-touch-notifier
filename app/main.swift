@@ -4,7 +4,7 @@
 //   FIDO2/U2F  CTAPHID KEEPALIVE reports that request user presence
 //   OpenPGP    the system CCID reader emits "Time extension received"
 //
-// The banner subtitle names the waiting process: the HID user client creator
+// The banner names the waiting process: the HID user client creator
 // for FIDO2, the gpg-agent socket client for OpenPGP.
 //
 // Notifications come from this signed bundle, so the banner shows this app's
@@ -318,8 +318,7 @@ final class Notifier: NSObject, NSApplicationDelegate, UNUserNotificationCenterD
     func post(_ kind: String) {
         let c = UNMutableNotificationContent()
         c.title = "YubiKey \(kind)"
-        c.subtitle = requester() ?? ""
-        c.body = "Touch your YubiKey"
+        c.body = requester() ?? "Touch your YubiKey"
         c.sound = .default
         // Fixed identifier so a later add replaces, and dismiss can remove it.
         center.add(UNNotificationRequest(identifier: groupID, content: c, trigger: nil))
