@@ -15,6 +15,9 @@ Two native signals are matched:
 
 A banner appears while the key is waiting and withdraws when the operation ends.
 
+The banner names the process that asked for the touch and its parent, e.g. `ssh-keygen ← git`.
+If an AI agent (Claude Code, Codex, Gemini CLI, Copilot CLI, Cursor, OpenCode, Aider and others) started it, the agent comes first: `Claude Code: ssh-keygen ← git`.
+
 ## Install
 
 1. Download `YubiKeyTouchNotifier.zip` from the
@@ -27,13 +30,10 @@ A banner appears while the key is waiting and withdraws when the operation ends.
 > macOS asks to allow notifications, and the app registers itself as a login item so it starts automatically afterwards.
 > The release download is signed and notarized, so it should open without a Gatekeeper warning.
 
-The legacy shell scripts remain in the repository for historical reference.
-They are unsupported and do not include the macOS 26 signal handling.
-
 ## Test it
 
 Perform a touch-required operation: a GPG signature (`echo test | gpg --clearsign`), an SSH auth, or a WebAuthn login. 
-A "Touch your YubiKey" notification appears.
+A "YubiKey OpenPGP" or "YubiKey FIDO2" notification appears.
 
 To trigger a sample banner without a real touch:
 
@@ -66,4 +66,6 @@ Intel Macs are not supported.
 
 - OpenPGP detection is heuristic and may break if a future macOS release renames
   its CryptoTokenKit log message.
+- Agent detection follows the parent process chain, so commands started through tmux,
+  screen or launchd lose the agent name.
 - Focus modes suppress banners unless you allow the app in the Focus settings.
