@@ -1,0 +1,25 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v6
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: swift
+          build-mode: manual
+      - run: swiftc -target arm64-apple-macosx26.0 app/main.swift -o "$RUNNER_TEMP/yubikey-touch-notifier"
+      - uses: github/codeql-action/analyze@v4
