@@ -43,6 +43,7 @@ let agents = [
     "droid": "Droid",
     "qwen": "Qwen Code",
 ]
+let interpreters: Set = ["node", "bun", "deno"]
 
 struct FIDOEvent: Equatable {
     let channel: UInt32
@@ -124,9 +125,10 @@ func creatorPID(_ creator: String) -> pid_t? {
 }
 
 func agentName(executable: String, argv: [String]) -> String? {
+    let names = argv.prefix(2).map { ($0 as NSString).lastPathComponent }
+    let interpreted = names.first.map { interpreters.contains($0) || $0.hasPrefix("python") } ?? false
     let app = executable.split(separator: "/").first { $0.hasSuffix(".app") }.map { String($0.dropLast(4)) }
-    let names = argv.prefix(2).map { ($0 as NSString).lastPathComponent } + [app].compactMap { $0 }
-    return names.lazy.compactMap { agents[$0] }.first
+    return (names.prefix(interpreted ? 2 : 1) + [app].compactMap { $0 }).lazy.compactMap { agents[$0] }.first
 }
 
 func bsdInfo(_ pid: pid_t) -> proc_bsdinfo? {
@@ -257,6 +259,7 @@ func selfCheck() {
             executable: "/Applications/Cursor.app/Contents/Frameworks/Cursor Helper (Plugin).app/Contents/MacOS/Cursor Helper (Plugin)",
             argv: []) == "Cursor")
     precondition(agentName(executable: "/bin/zsh", argv: ["-zsh"]) == nil)
+    precondition(agentName(executable: "/usr/bin/ssh", argv: ["ssh", "claude"]) == nil)
 }
 
 let fidoReportCallback: IOHIDReportCallback = { context, result, sender, type, reportID, report, count in
